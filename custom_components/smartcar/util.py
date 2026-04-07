@@ -8,7 +8,6 @@ from typing import Any, cast, overload
 
 from aiohttp import ClientResponse
 
-
 _RETRYABLE_STATUSES = frozenset({429, 500})
 
 
@@ -26,9 +25,14 @@ async def async_request_with_retry(
 
     Retries on 500 responses with exponential backoff. For 429
     responses, only retries when a Retry-After header is present.
-    Returns the response on success or after retries are exhausted
-    — the caller is responsible for calling raise_for_status() and
+    The caller is responsible for calling raise_for_status() and
     handling errors.
+
+    Returns:
+        The response on success or after retries are exhausted.
+
+    Raises:
+        AssertionError: Should never be raised; satisfies the type checker.
     """
     for attempt in range(max_retries + 1):
         response = await request_fn()
@@ -86,11 +90,9 @@ def _key_path_traverse[KeyT: str, ValueT](
     assert offset <= 0
     try:
         return reduce(
-            lambda v, key: None
-            if v is None
-            else v.setdefault(key, {})
-            if fill
-            else v[key],
+            lambda v, key: (
+                None if v is None else v.setdefault(key, {}) if fill else v[key]
+            ),
             key_path.split(".")[: offset or None],
             cast("Any", dict_obj),
         )

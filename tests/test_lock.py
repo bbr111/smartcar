@@ -3,7 +3,6 @@
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock
 
-from aiohttp import ClientResponseError
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockState
 from homeassistant.const import ATTR_ENTITY_ID, SERVICE_LOCK, SERVICE_UNLOCK, Platform
 from homeassistant.core import HomeAssistant
@@ -24,15 +23,16 @@ NO_ERROR = None.__class__
         "api_status_slug",
         "expected_state",
         "expected_raises",
+        "api_calls",
     ),
     [
-        (SERVICE_LOCK, 200, "success", LockState.LOCKED, NO_ERROR),
-        (SERVICE_UNLOCK, 200, "success", LockState.UNLOCKED, NO_ERROR),
-        (SERVICE_LOCK, 409, "unreachable", LockState.UNLOCKED, NO_ERROR),
-        (SERVICE_UNLOCK, 409, "unreachable", LockState.UNLOCKED, NO_ERROR),
-        (SERVICE_LOCK, 401, "unauthroized", LockState.UNLOCKED, NO_ERROR),
-        (SERVICE_UNLOCK, 401, "unauthroized", LockState.UNLOCKED, NO_ERROR),
-        (SERVICE_UNLOCK, 500, "server", LockState.UNLOCKED, ClientResponseError),
+        (SERVICE_LOCK, 200, "success", LockState.LOCKED, NO_ERROR, 1),
+        (SERVICE_UNLOCK, 200, "success", LockState.UNLOCKED, NO_ERROR, 1),
+        (SERVICE_LOCK, 409, "unreachable", LockState.UNLOCKED, NO_ERROR, 1),
+        (SERVICE_UNLOCK, 409, "unreachable", LockState.UNLOCKED, NO_ERROR, 1),
+        (SERVICE_LOCK, 401, "unauthroized", LockState.UNLOCKED, NO_ERROR, 1),
+        (SERVICE_UNLOCK, 401, "unauthroized", LockState.UNLOCKED, NO_ERROR, 1),
+        (SERVICE_UNLOCK, 500, "server", LockState.UNLOCKED, NO_ERROR, 4),
     ],
 )
 @pytest.mark.parametrize("vehicle_fixture", ["unknown_make"])
@@ -47,6 +47,7 @@ async def test_lock(
     api_status_slug: str,
     expected_state: LockState,
     expected_raises: Exception,
+    api_calls: int,
 ) -> None:
     """Test locking doors."""
 
@@ -81,7 +82,7 @@ async def test_lock(
         expected_raises,  # type: ignore[arg-type]
     )
 
-    assert len(aioclient_mock.mock_calls) == 2
+    assert len(aioclient_mock.mock_calls) == 1 + api_calls
     assert [tuple(mock_call) for mock_call in aioclient_mock.mock_calls[1:]] == snapshot
 
 

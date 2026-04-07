@@ -3,7 +3,6 @@
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock
 
-from aiohttp import ClientResponseError
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -34,15 +33,16 @@ NO_ERROR = None.__class__
         "api_status_slug",
         "expected_state",
         "expected_raises",
+        "api_calls",
     ),
     [
-        (SERVICE_TURN_ON, 200, "success", STATE_ON, NO_ERROR),
-        (SERVICE_TURN_OFF, 200, "success", STATE_OFF, NO_ERROR),
-        (SERVICE_TURN_ON, 409, "unreachable", STATE_OFF, NO_ERROR),
-        (SERVICE_TURN_OFF, 409, "unreachable", STATE_OFF, NO_ERROR),
-        (SERVICE_TURN_ON, 401, "unauthroized", STATE_OFF, NO_ERROR),
-        (SERVICE_TURN_OFF, 401, "unauthroized", STATE_OFF, NO_ERROR),
-        (SERVICE_TURN_OFF, 500, "server", STATE_OFF, ClientResponseError),
+        (SERVICE_TURN_ON, 200, "success", STATE_ON, NO_ERROR, 1),
+        (SERVICE_TURN_OFF, 200, "success", STATE_OFF, NO_ERROR, 1),
+        (SERVICE_TURN_ON, 409, "unreachable", STATE_OFF, NO_ERROR, 1),
+        (SERVICE_TURN_OFF, 409, "unreachable", STATE_OFF, NO_ERROR, 1),
+        (SERVICE_TURN_ON, 401, "unauthroized", STATE_OFF, NO_ERROR, 1),
+        (SERVICE_TURN_OFF, 401, "unauthroized", STATE_OFF, NO_ERROR, 1),
+        (SERVICE_TURN_OFF, 500, "server", STATE_OFF, NO_ERROR, 4),
     ],
 )
 @pytest.mark.parametrize("vehicle_fixture", ["unknown_make"])
@@ -57,6 +57,7 @@ async def test_switch(
     api_status_slug: str,
     expected_state: str,
     expected_raises: Exception,
+    api_calls: int,
 ) -> None:
     """Test switching charging on/off."""
 
@@ -91,7 +92,7 @@ async def test_switch(
         expected_raises,  # type: ignore[arg-type]
     )
 
-    assert len(aioclient_mock.mock_calls) == 2
+    assert len(aioclient_mock.mock_calls) == 1 + api_calls
     assert [tuple(mock_call) for mock_call in aioclient_mock.mock_calls[1:]] == snapshot
 
 

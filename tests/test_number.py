@@ -3,7 +3,6 @@
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock
 
-from aiohttp import ClientResponseError
 from homeassistant.components.number import (
     ATTR_VALUE,
     DOMAIN as NUMBER_DOMAIN,
@@ -40,7 +39,7 @@ NO_ERROR = None.__class__
         (200, "success", 90, 90, NO_ERROR, 1),
         (409, "unreachable", 90, 80, NO_ERROR, 1),
         (401, "unauthroized", 90, 80, NO_ERROR, 1),
-        (500, "server", 90, 80, ClientResponseError, 1),
+        (500, "server", 90, 80, NO_ERROR, 4),
         (None, None, 40, 80, ServiceValidationError, 0),
         (None, None, 110, 80, ServiceValidationError, 0),
     ],

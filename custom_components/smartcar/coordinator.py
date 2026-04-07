@@ -45,8 +45,8 @@ class DatapointConfig:
     endpoint_v2: str | None  # the read (and batch) endpoint
     value_key_path_v2: str | None
     value_transform_v2: Callable[[Any], Any] = lambda x: {"value": x}
-    value_merge_v2: Callable[[dict, dict], dict] = (
-        lambda current, update: current | update
+    value_merge_v2: Callable[[dict, dict], dict] = lambda current, update: (
+        current | update
     )
     is_v2_value: Callable[[Any], bool] = (  # for saved restore-state values
         lambda _x: False
@@ -674,9 +674,8 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
             HTTPStatus.TOO_MANY_REQUESTS,
             HTTPStatus.INTERNAL_SERVER_ERROR,
         }:
-            raise UpdateFailed(
-                f"API returned {response.status} after retries"
-            )
+            msg = f"API returned {response.status} after retries"
+            raise UpdateFailed(msg)
 
         response.raise_for_status()
         response_data = await response.json()
