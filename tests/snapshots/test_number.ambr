@@ -41,8 +41,38 @@
     ),
   ])
 # ---
-# name: test_charging_limit[unknown_make-500-server-90-80-ClientResponseError-1]
+# name: test_charging_limit[unknown_make-500-server-90-80-NoneType-4]
   list([
+    tuple(
+      'post',
+      URL('http://test.local/v2.0/vehicles/a1d50709-3502-4faa-ba43-a5c7565e6a09/charge/limit'),
+      dict({
+        'limit': 0.9,
+      }),
+      dict({
+        'authorization': 'Bearer mock-token',
+      }),
+    ),
+    tuple(
+      'post',
+      URL('http://test.local/v2.0/vehicles/a1d50709-3502-4faa-ba43-a5c7565e6a09/charge/limit'),
+      dict({
+        'limit': 0.9,
+      }),
+      dict({
+        'authorization': 'Bearer mock-token',
+      }),
+    ),
+    tuple(
+      'post',
+      URL('http://test.local/v2.0/vehicles/a1d50709-3502-4faa-ba43-a5c7565e6a09/charge/limit'),
+      dict({
+        'limit': 0.9,
+      }),
+      dict({
+        'authorization': 'Bearer mock-token',
+      }),
+    ),
     tuple(
       'post',
       URL('http://test.local/v2.0/vehicles/a1d50709-3502-4faa-ba43-a5c7565e6a09/charge/limit'),

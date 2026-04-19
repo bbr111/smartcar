@@ -1,7 +1,70 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from functools import reduce
 import hashlib
 import hmac
+import logging
 from typing import Any, cast, overload
+
+from aiohttp import ClientResponse
+
+_RETRYABLE_STATUSES = frozenset({429, 500})
+
+
+async def async_request_with_retry(
+    request_fn: Callable[[], Awaitable[ClientResponse]],
+    *,
+    logger: logging.Logger,
+    retry_statuses: frozenset[int] = _RETRYABLE_STATUSES,
+    max_retries: int = 3,
+    base_delay: float = 2.0,
+    max_delay: float = 60.0,
+    context: str = "",
+) -> ClientResponse:
+    """Execute an async HTTP request with retry and exponential backoff.
+
+    Retries on 500 responses with exponential backoff. For 429
+    responses, only retries when a Retry-After header is present.
+    The caller is responsible for calling raise_for_status() and
+    handling errors.
+
+    Returns:
+        The response on success or after retries are exhausted.
+
+    Raises:
+        AssertionError: Should never be raised; satisfies the type checker.
+    """
+    for attempt in range(max_retries + 1):
+        response = await request_fn()
+
+        if response.status not in retry_statuses or attempt == max_retries:
+            return response
+
+        if response.status == 429:
+            retry_after = response.headers.get("Retry-After")
+            if not retry_after:
+                return response
+            try:
+                delay = min(float(retry_after), max_delay)
+            except ValueError:
+                return response
+        else:
+            delay = min(base_delay * 2**attempt, max_delay)
+
+        logger.warning(
+            "%s: HTTP %s, retrying in %.1fs (attempt %s/%s)",
+            context,
+            response.status,
+            delay,
+            attempt + 1,
+            max_retries,
+        )
+
+        response.release()
+        await asyncio.sleep(delay)
+
+    # unreachable — the loop always returns — but satisfies the type checker
+    raise AssertionError  # pragma: no cover
 
 
 def unique_id_from_entry_data(data: dict) -> str:
@@ -27,11 +90,9 @@ def _key_path_traverse[KeyT: str, ValueT](
     assert offset <= 0
     try:
         return reduce(
-            lambda v, key: None
-            if v is None
-            else v.setdefault(key, {})
-            if fill
-            else v[key],
+            lambda v, key: (
+                None if v is None else v.setdefault(key, {}) if fill else v[key]
+            ),
             key_path.split(".")[: offset or None],
             cast("Any", dict_obj),
         )

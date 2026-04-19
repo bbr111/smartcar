@@ -1,10 +1,13 @@
 from contextlib import nullcontext
 import copy
+import logging
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from custom_components.smartcar.util import (
+    async_request_with_retry,
     hmac_sha256_hexdigest,
     key_path_get,
     key_path_pop,
@@ -237,3 +240,112 @@ def test_key_path_transpose(
     with pytest.raises(expected_exception) if expected_exception else nullcontext():
         key_path_transpose(obj, transpositions, **extra_kwargs)
         assert obj == expected_result
+
+
+def _mock_response(status: int, headers: dict | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status = status
+    resp.headers = headers or {}
+    resp.release = MagicMock()
+    return resp
+
+
+_logger = logging.getLogger(__name__)
+
+
+async def test_retry_success_first_attempt():
+    ok = _mock_response(200)
+    request_fn = AsyncMock(return_value=ok)
+
+    result = await async_request_with_retry(request_fn, logger=_logger, context="test")
+
+    assert result is ok
+    assert request_fn.call_count == 1
+
+
+async def test_retry_500_then_success():
+    error = _mock_response(500)
+    ok = _mock_response(200)
+    request_fn = AsyncMock(side_effect=[error, ok])
+
+    result = await async_request_with_retry(
+        request_fn, logger=_logger, context="test", base_delay=0.01
+    )
+
+    assert result is ok
+    assert request_fn.call_count == 2
+    error.release.assert_called_once()
+
+
+async def test_retry_429_with_retry_after_then_success():
+    rate_limited = _mock_response(429, headers={"Retry-After": "0.01"})
+    ok = _mock_response(200)
+    request_fn = AsyncMock(side_effect=[rate_limited, ok])
+
+    result = await async_request_with_retry(request_fn, logger=_logger, context="test")
+
+    assert result is ok
+    assert request_fn.call_count == 2
+    rate_limited.release.assert_called_once()
+
+
+async def test_retry_429_without_retry_after_does_not_retry():
+    rate_limited = _mock_response(429)
+    request_fn = AsyncMock(return_value=rate_limited)
+
+    result = await async_request_with_retry(request_fn, logger=_logger, context="test")
+
+    assert result is rate_limited
+    assert request_fn.call_count == 1
+
+
+async def test_retry_429_with_invalid_retry_after_does_not_retry():
+    rate_limited = _mock_response(429, headers={"Retry-After": "not-a-number"})
+    request_fn = AsyncMock(return_value=rate_limited)
+
+    result = await async_request_with_retry(request_fn, logger=_logger, context="test")
+
+    assert result is rate_limited
+    assert request_fn.call_count == 1
+
+
+async def test_retry_caps_retry_after_at_max_delay():
+    rate_limited = _mock_response(429, headers={"Retry-After": "999"})
+    ok = _mock_response(200)
+    request_fn = AsyncMock(side_effect=[rate_limited, ok])
+
+    result = await async_request_with_retry(
+        request_fn,
+        logger=_logger,
+        context="test",
+        max_delay=0.01,
+    )
+
+    assert result is ok
+    assert request_fn.call_count == 2
+
+
+async def test_retry_exhausted_returns_failed_response():
+    error = _mock_response(500)
+    request_fn = AsyncMock(return_value=error)
+
+    result = await async_request_with_retry(
+        request_fn,
+        logger=_logger,
+        context="test",
+        max_retries=2,
+        base_delay=0.01,
+    )
+
+    assert result is error
+    assert request_fn.call_count == 3  # 1 initial + 2 retries
+
+
+async def test_retry_non_retryable_status_returns_immediately():
+    forbidden = _mock_response(403)
+    request_fn = AsyncMock(return_value=forbidden)
+
+    result = await async_request_with_retry(request_fn, logger=_logger, context="test")
+
+    assert result is forbidden
+    assert request_fn.call_count == 1

@@ -20,13 +20,14 @@ from . import const as smartcar_const
 from .const import DOMAIN
 from .coordinator import DATAPOINT_ENTITY_KEY_MAP, SmartcarVehicleCoordinator
 from .types import SmartcarAPIError
-from .util import key_path_get
+from .util import async_request_with_retry, key_path_get
 
 _LOGGER = logging.getLogger(__name__)
 
 ERROR_STATUS_VEHICLE_STATE = 409
 ERROR_STATUS_RATE_LIMIT = 429
 ERROR_STATUS_BILLING = 430
+ERROR_STATUS_SERVER_ERROR = 500
 ERROR_STATUS_COMPATIBILITY = 501
 ERROR_STATUS_UPSTREAM = 502
 
@@ -275,11 +276,15 @@ async def async_send_command(
     success = False
 
     try:
-        resp = await coordinator.auth.request(
-            method,
-            f"vehicles/{coordinator.vehicle_id}{subpath}",
-            version=version,
-            json=payload,
+        resp = await async_request_with_retry(
+            lambda: coordinator.auth.request(
+                method,
+                f"vehicles/{coordinator.vehicle_id}{subpath}",
+                version=version,
+                json=payload,
+            ),
+            logger=_LOGGER,
+            context=f"Command {subpath} for {coordinator.vin}",
         )
         resp.raise_for_status()
         success = True
@@ -296,6 +301,7 @@ async def async_send_command(
             ERROR_STATUS_VEHICLE_STATE,
             ERROR_STATUS_RATE_LIMIT,
             ERROR_STATUS_BILLING,
+            ERROR_STATUS_SERVER_ERROR,
             ERROR_STATUS_COMPATIBILITY,
             ERROR_STATUS_UPSTREAM,
         }:
