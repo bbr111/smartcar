@@ -69,7 +69,7 @@ Initially, you will have the option to enable [webhooks](#webhooks). If desired,
 
 #### Authorization Data Entry
 
-1. Choose a name for your credentials and enter the **Client ID** and **Client Secret** which can be found in the [Smartcar dashboard][smartcar-dashboard].
+1. Choose a name for your credentials and enter the **Client ID** and **Client Secret** from your Smartcar application API Credentials in the [Smartcar dashboard][smartcar-dashboard].
 1. **Crucially, set the "Redirect URIs"** in the Smartcar settings for your application. You need to add **exactly** the URI your Home Assistant instance uses for OAuth callbacks.
    - Most users will simply use the **My Home Assistant** URI: `https://my.home-assistant.io/redirect/oauth`
      > Note: This is not a placeholder. It is the URI that must be used unless you’ve disabled or removed the `default_config:` line from your configuration and disabled the [My Home Assistant Integration](https://www.home-assistant.io/integrations/my/).
@@ -90,6 +90,18 @@ Initially, you will have the option to enable [webhooks](#webhooks). If desired,
    \* _Functionality for all permissions depends on car support_
 
 1. Continue to the [next section](#authorization-via-smartcar-connect) which explains the steps to authorize your vehicle via [Smartcar connect](https://smartcar.com/docs/connect/what-is-connect).
+
+#### Smartcar API v3 authentication
+
+This integration uses Smartcar's v3/API Authentication model described in the [Getting Started guide](https://smartcar.com/docs/getting-started/introduction):
+
+- Smartcar Connect is used for vehicle-owner consent.
+- Home Assistant uses your Smartcar application **Client ID** and **Client Secret** as API credentials.
+- The integration exchanges those credentials for an application-level token at `https://iam.smartcar.com/oauth2/token`.
+- Vehicle data and commands are requested from `https://vehicle.api.smartcar.com/v3`.
+- Each connected vehicle stores the Smartcar `userId` returned by the Connections API and sends it as the `sc-user-id` header for vehicle requests.
+
+Do not use the legacy per-vehicle token endpoint (`https://auth.smartcar.com/oauth/token`) for API calls; Smartcar marks that flow and the v2.0 Vehicles API as legacy.
 
 #### Authorization via Smartcar Connect
 

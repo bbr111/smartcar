@@ -13,7 +13,6 @@ from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
-    OAuth2Session,
     async_get_config_entry_implementation,
 )
 from homeassistant.helpers.typing import ConfigType
@@ -57,8 +56,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
     implementation = await async_get_config_entry_implementation(hass, entry)
     websession = async_get_clientsession(hass)
-    oauth_session = OAuth2Session(hass, entry, implementation)
-    auth = AsyncConfigEntryAuth(websession, oauth_session, API_HOST)
+    auth = AsyncConfigEntryAuth(
+        websession, implementation.client_id, implementation.client_secret, API_HOST
+    )
     coordinators: dict[str, SmartcarVehicleCoordinator] = {}
     meta_coordinator = DataUpdateCoordinator(
         hass, _LOGGER, name=f"{DOMAIN}_meta", config_entry=entry
@@ -93,7 +93,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Registered device for VIN: %s", vin)
 
         # create and store coordinator
-        coordinator = SmartcarVehicleCoordinator(hass, auth, vehicle_id, vin, entry)
+        coordinator = SmartcarVehicleCoordinator(
+            hass, auth, vehicle_id, vin, details.get("user_id", ""), entry
+        )
         coordinators[vin] = coordinator
         _LOGGER.debug("Coordinator created and initial data fetched for VIN: %s", vin)
 
@@ -282,7 +284,7 @@ async def _store_all_vehicles(
     data: dict,
     auth: AbstractAuth,
 ) -> None:
-    """Fetch and store data for all vehicles in config entry data.
+    """Fetch and store data for all Smartcar v3 connections.
 
     Raises:
         EmptyVehicleListError: If no vehicles are found.
@@ -290,40 +292,37 @@ async def _store_all_vehicles(
         ClientResponseError: If there is a request error.
     """
 
-    _LOGGER.info("Fetching Smartcar vehicle IDs...")
+    _LOGGER.info("Fetching Smartcar vehicle connections...")
 
     data["vehicles"] = {}
 
     try:
-        vehicle_list_resp = await auth.request(
-            "get",
-            "vehicles",
-        )
-        vehicle_list_resp.raise_for_status()
-        vehicle_list_data = await vehicle_list_resp.json()
-        vehicle_ids = vehicle_list_data.get("vehicles", [])
+        connections_resp = await auth.request("get", "connections")
+        connections_resp.raise_for_status()
+        connections_data = await connections_resp.json()
+        connections = connections_data.get("connections", [])
     except ClientResponseError as err:
         if err.status == HTTPStatus.UNAUTHORIZED:
-            msg = f"Auth error fetching vehicle list: {err.status}"
+            msg = f"Auth error fetching vehicle connections: {err.status}"
             raise InvalidAuthError(msg) from err
         raise
 
-    _LOGGER.info("Found %s vehicle IDs", len(vehicle_ids))
+    _LOGGER.info("Found %s vehicle connections", len(connections))
 
-    if not vehicle_ids:
+    if not connections:
         raise EmptyVehicleListError
 
     await asyncio.gather(
-        *[_store_vehicle_details(data, auth, vid) for vid in vehicle_ids]
+        *[_store_vehicle_details(data, auth, connection) for connection in connections]
     )
 
 
 async def _store_vehicle_details(
     data: dict,
     auth: AbstractAuth,
-    vehicle_id: str,
+    connection: dict,
 ) -> None:
-    """Fetch and store data for a single vehicle.
+    """Fetch and store data for a single Smartcar v3 connection.
 
     Raises:
         MissingVINError: If the VIN is not available.
@@ -331,15 +330,36 @@ async def _store_vehicle_details(
         ClientResponseError: If there is a request error.
     """
 
+    vehicle_id = connection.get("vehicleId") or connection.get("vehicle_id")
+    user_id = connection.get("userId") or connection.get("user_id")
+
+    if not vehicle_id or not user_id:
+        msg = f"Incomplete Smartcar connection: {connection}"
+        raise MissingVINError(msg)
+
     try:
+        _LOGGER.debug("Fetching attributes for vehicle ID: %s", vehicle_id)
+        attr_resp = await auth.request(
+            "get",
+            f"vehicles/{vehicle_id}",
+            user_id=user_id,
+        )
+        attr_resp.raise_for_status()
+        vehicle_info = await attr_resp.json()
+        attrs = vehicle_info.get("data", {}).get("attributes", vehicle_info)
+        make = attrs.get("make")
+        model = attrs.get("model")
+        year = attrs.get("year")
+
         _LOGGER.debug("Fetching VIN for vehicle ID: %s", vehicle_id)
         vin_resp = await auth.request(
             "get",
-            f"vehicles/{vehicle_id}/vin",
+            f"vehicles/{vehicle_id}/signals/vehicleidentification-vin",
+            user_id=user_id,
         )
         vin_resp.raise_for_status()
         vin_data = await vin_resp.json()
-        vin = vin_data.get("vin")
+        vin = vin_data.get("value") or vin_data.get("body", {}).get("value")
 
         if not vin:
             msg = f"No VIN for vehicle {vehicle_id}"
@@ -347,26 +367,11 @@ async def _store_vehicle_details(
 
         data["vehicles"][vehicle_id] = {
             "vin": vin,
+            "user_id": user_id,
+            "make": make,
+            "model": model,
+            "year": year,
         }
-
-        _LOGGER.debug("Fetching attributes for vehicle ID: %s", vehicle_id)
-        attr_resp = await auth.request(
-            "get",
-            f"vehicles/{vehicle_id}",
-        )
-        attr_resp.raise_for_status()
-        vehicle_info = await attr_resp.json()
-        make = vehicle_info.get("make")
-        model = vehicle_info.get("model")
-        year = vehicle_info.get("year")
-
-        data["vehicles"][vehicle_id].update(
-            {
-                "make": make,
-                "model": model,
-                "year": year,
-            }
-        )
     except ClientResponseError as err:
         if err.status == HTTPStatus.UNAUTHORIZED:
             msg = f"Auth error [{err.status}] during vehicle setup"

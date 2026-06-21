@@ -12,7 +12,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.const import CONF_ACCESS_TOKEN, CONF_TOKEN, CONF_WEBHOOK_ID
+from homeassistant.const import CONF_TOKEN, CONF_WEBHOOK_ID
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
@@ -24,7 +24,7 @@ from homeassistant.helpers.selector import (
 import voluptuous as vol
 
 from . import populate_entry_data, vehicle_vins_in_use
-from .auth_impl import AccessTokenAuthImpl
+from .auth_impl import ClientCredentialsAuthImpl
 from .const import (
     API_HOST,
     CONF_APPLICATION_MANAGEMENT_TOKEN,
@@ -251,8 +251,10 @@ class SmartcarOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):  # ty
         assert self.entry_data is not None
 
         session = async_get_clientsession(self.hass)
-        token = data[CONF_TOKEN][CONF_ACCESS_TOKEN]
-        auth = AccessTokenAuthImpl(session, token, API_HOST)
+        implementation = self.flow_impl
+        auth = ClientCredentialsAuthImpl(
+            session, implementation.client_id, implementation.client_secret, API_HOST
+        )
         data = {**self.entry_data, **data}
         data.pop(CONF_USE_WEBHOOKS, None)
         description_placeholders = {**BASE_DESCRIPTION_PLACEHOLDERS}
