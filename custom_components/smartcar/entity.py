@@ -160,7 +160,7 @@ class SmartcarEntity[ValueT, RawValueT](
         payload: dict[str, Any],
         *,
         method: str = "post",
-        version: str = "2.0",
+        version: str = "3",
         **kwargs,  # noqa: ARG002, ANN003
     ) -> bool:
         try:
@@ -270,18 +270,20 @@ async def async_send_command(
     payload: dict[str, Any],
     *,
     method: str = "post",
-    version: str = "2.0",
+    version: str = "3",
 ) -> bool:
     _LOGGER.info("Sending %s request for %s", subpath, coordinator.vin)
     success = False
+    command_path, command_payload = _v3_command_path_and_payload(subpath, payload)
 
     try:
         resp = await async_request_with_retry(
             lambda: coordinator.auth.request(
                 method,
-                f"vehicles/{coordinator.vehicle_id}{subpath}",
+                f"vehicles/{coordinator.vehicle_id}{command_path}",
                 version=version,
-                json=payload,
+                user_id=coordinator.user_id,
+                json=command_payload,
             ),
             logger=_LOGGER,
             context=f"Command {subpath} for {coordinator.vin}",
@@ -310,3 +312,30 @@ async def async_send_command(
             raise
 
     return success
+
+
+def _v3_command_path_and_payload(
+    subpath: str, payload: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    if subpath == "/charge":
+        action = payload.get("action")
+        return (
+            "/commands/charge/start"
+            if action == "START"
+            else "/commands/charge/stop",
+            {},
+        )
+
+    if subpath == "/charge/limit":
+        return "/commands/charge/set-limit", {"limit": payload["limit"]}
+
+    if subpath == "/security":
+        action = payload.get("action")
+        return (
+            "/commands/security/lock"
+            if action == "LOCK"
+            else "/commands/security/unlock",
+            {},
+        )
+
+    return subpath, payload

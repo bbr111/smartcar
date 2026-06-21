@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -494,18 +495,20 @@ DATAPOINT_CODE_MAP = {
 class SmartcarVehicleCoordinator(DataUpdateCoordinator):
     """Coordinates updates with selective batch paths and dynamic interval."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0917
         self,
         hass: HomeAssistant,
         auth: AbstractAuth,
         vehicle_id: str,
         vin: str,
+        user_id: str,
         entry: ConfigEntry,
     ) -> None:
         """Initialize coordinator."""
         self.auth = auth
         self.vehicle_id = vehicle_id
         self.vin = vin
+        self.user_id = user_id
         self.entry = entry
         self.batch_requests: set[EntityDescriptionKey] = set()
         self.data: dict[str, Any] = {}
@@ -587,8 +590,8 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
                 continue
             config = DATAPOINT_ENTITY_KEY_MAP[key]
 
-            # currently polling is only supported via the v2 api
-            if config.endpoint_v2 and not entity.disabled:
+            # polling is supported for datapoints with a v3 signal code
+            if config.code and not entity.disabled:
                 self._batch_add(key)
 
     def _batch_process(self) -> list[EntityDescriptionKey]:
@@ -619,20 +622,13 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
 
         batch_requests = self._batch_process()
 
-        assert not any(
-            DATAPOINT_ENTITY_KEY_MAP[key].endpoint_v2 is None for key in batch_requests
-        )
-
-        request_path = f"vehicles/{self.vehicle_id}/batch"
-        request_batch_paths = sorted(
+        request_codes = sorted(
             {
-                v2_endpoint
+                code
                 for key in batch_requests
-                if (v2_endpoint := DATAPOINT_ENTITY_KEY_MAP[key].endpoint_v2)
-                is not None
+                if (code := DATAPOINT_ENTITY_KEY_MAP[key].code) is not None
             }
         )
-        request_body = {"requests": [{"path": path} for path in request_batch_paths]}
 
         if not batch_requests:
             _LOGGER.warning(
@@ -642,25 +638,31 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
             return self.data
 
         _LOGGER.debug(
-            "Coordinator %s: Requesting batch update (Interval: %s) for paths: %s",
+            "Coordinator %s: Requesting v3 signal update (Interval: %s) for signals: %s",
             self.name,
             self.update_interval,
-            request_batch_paths,
+            request_codes,
         )
 
         try:
-            response = await async_request_with_retry(
-                lambda: self.auth.request("post", request_path, json=request_body),
-                logger=_LOGGER,
-                context=f"Coordinator {self.name}",
+            responses = await asyncio.gather(
+                *(
+                    async_request_with_retry(
+                        lambda code=code: self.auth.request(
+                            "get",
+                            f"vehicles/{self.vehicle_id}/signals/{code}",
+                            user_id=self.user_id,
+                        ),
+                        logger=_LOGGER,
+                        context=f"Coordinator {self.name} signal {code}",
+                    )
+                    for code in request_codes
+                )
             )
 
         # response errors here for responses that have actually completed, i.e.
         # 4xx responses are for errors related to requests made in the
-        # underlying oauth handler. for instance, the implementation will raise
-        # for invalid an invalid status while negotiating a new token if there's
-        # an issue. unfortunately, it consumes the JSON response to log about
-        # the error, so we can only match on the status code.
+        # underlying auth handler.
         except ClientResponseError as exception:
             if exception.status in {
                 HTTPStatus.BAD_REQUEST,
@@ -670,21 +672,50 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed from exception
             raise
 
-        if response.status in {
-            HTTPStatus.TOO_MANY_REQUESTS,
-            HTTPStatus.INTERNAL_SERVER_ERROR,
-        }:
-            msg = f"API returned {response.status} after retries"
-            raise UpdateFailed(msg)
+        for response in responses:
+            if response.status in {
+                HTTPStatus.TOO_MANY_REQUESTS,
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            }:
+                msg = f"API returned {response.status} after retries"
+                raise UpdateFailed(msg)
+            response.raise_for_status()
 
-        response.raise_for_status()
-        response_data = await response.json()
+        response_data = [await response.json() for response in responses]
 
-        if "responses" not in response_data:
-            msg = "Invalid batch response format"
-            raise UpdateFailed(msg)
+        return self._merge_signal_data(
+            dict(zip(request_codes, response_data, strict=True))
+        )
 
-        return self._merge_batch_data(response_data)
+    def _merge_signal_data(self, signal_data: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        """Merge data from v3 signal responses.
+
+        Returns:
+            The newly merged data.
+        """
+
+        with self.create_updated_data() as (add, updated_data):
+            for code, body in signal_data.items():
+                unit = body.pop("unit", None)
+                if unit == "percent":
+                    _normalize_percent_signal_body(code, body)
+                unit_system = (
+                    "imperial"
+                    if unit in {"miles", "psi", "gallons"}
+                    else "metric"
+                    if unit
+                    else None
+                )
+
+                add.from_response_body(
+                    code,
+                    body=body,
+                    unit_system=unit_system,
+                )
+
+            _LOGGER.debug("Coordinator %s: v3 signal update processed", self.name)
+
+            return updated_data
 
     def _merge_batch_data(self, batch_data: dict[str, Any]) -> dict[str, Any]:
         """Merge data from the responses from a batch request.
@@ -875,3 +906,15 @@ class _DataAdder:
                 self.data[f"{storage_key}:fetched_at"] = fetched_at
             elif can_clear:
                 self.data.pop(f"{storage_key}:fetched_at", None)
+
+
+def _normalize_percent_signal_body(code: str, body: dict[str, Any]) -> None:
+    if "values" in body:
+        item_key = "limit" if code == "charge-chargelimits" else "value"
+        body["values"] = [
+            value | {item_key: value[item_key] / 100}
+            for value in body["values"]
+            if item_key in value
+        ]
+    elif "value" in body:
+        body["value"] /= 100

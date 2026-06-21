@@ -27,7 +27,8 @@ class AbstractAuth(ABC):
         self,
         method: str,
         path: str,
-        version: str = "2.0",
+        version: str = "3",
+        user_id: str | None = None,
         **kwargs,  # noqa: ANN003
     ) -> ClientResponse:
         """Make a request.
@@ -38,6 +39,8 @@ class AbstractAuth(ABC):
         access_token = await self.async_get_access_token()
         headers = dict(kwargs.pop("headers", {}))
         headers["authorization"] = f"Bearer {access_token}"
+        if user_id:
+            headers["sc-user-id"] = user_id
 
         _LOGGER.debug(
             "HTTP %s request %s/v%s/%s %r headers=%r",

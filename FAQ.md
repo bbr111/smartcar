@@ -41,6 +41,17 @@ Smartcar favours webhooks instead of polling for vehicle updates. Webhooks reall
 This request can take a very long time to receive a response from your car, between 20 seconds to a couple of minutes. If you open the sensor you've just updated in HA, you will see that there are additional attributes for it which will include: `Age` – the date and time at which the data was recorded by the vehicle `Fetched at` – the date and time at which Smartcar fetched the data These values do not necessarily update each time you make a request. They only update when Smartcar changes them (i.e. when it reaches out to your car brand's server, it'll update the `fetched_at` value).
 **Remember:** you have a very limited number of poll requests and you could run out very quickly in testing.
 
+### The Smartcar documentation mentions `iam.smartcar.com`, `vehicle.api.smartcar.com/v3`, or `sc-user-id`. Should I use those settings?
+
+Yes. The Home Assistant integration now follows Smartcar's v3/API Authentication setup:
+
+- Use the Smartcar application's **Client ID** and **Client Secret** from the API Credentials area of the dashboard.
+- Keep the Home Assistant OAuth redirect URI configured in Smartcar Connect so the vehicle owner can grant access.
+- The integration obtains application-level access tokens from `https://iam.smartcar.com/oauth2/token`.
+- Vehicle data and commands are sent to `https://vehicle.api.smartcar.com/v3` with the connected user's `sc-user-id` header.
+
+If an existing Home Assistant config entry was created with the old v2/per-vehicle-token flow, re-authenticate or recreate the integration so the entry can store the Smartcar `userId` for each vehicle connection.
+
 ### Is the Smartcar-HA integration configured correctly for webhooks?
 
 If your Home Assistant _network_ configuration is correct (see above), the [Smartcar-HA integration](https://my.home-assistant.io/redirect/integration/?domain=smartcar) will provide you a webhook URL that looks like this:

@@ -2,7 +2,9 @@ from enum import StrEnum, auto
 
 DOMAIN = "smartcar"
 DEFAULT_NAME = "Smartcar"
-API_HOST = "https://api.smartcar.com"
+API_HOST = "https://vehicle.api.smartcar.com"
+API_VERSION = "3"
+OAUTH2_APP_TOKEN = "https://iam.smartcar.com/oauth2/token"  # noqa: S105
 
 PLATFORMS = [
     "sensor",
