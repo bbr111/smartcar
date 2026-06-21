@@ -9,12 +9,13 @@ import sys
 def normalize_version(version: str) -> str:
     """Return a Home Assistant compatible version key.
 
-    Tags may carry a non-numeric prefix (e.g. a fork marker like "bbr0.0.1" or
-    a leading "v"). Home Assistant rejects manifests whose version is not a
-    valid version, so strip everything before the first numeric component.
+    Tags may carry a non-numeric prefix (a leading "v" or a fork marker like
+    "bbr0.0.1"). Home Assistant rejects manifests whose version is not a valid
+    version, so drop everything before the first numeric component while
+    keeping any trailing SemVer pre-release ("-bbr") or build ("+bbr") suffix,
+    e.g. "bbr0.0.1" -> "0.0.1" and "v0.0.1+bbr" -> "0.0.1+bbr".
     """
-    match = re.search(r"\d+(?:\.\d+)*", version)
-    return match.group(0) if match else version
+    return re.sub(r"^[^0-9]*", "", version.strip())
 
 
 def update_manifest():
