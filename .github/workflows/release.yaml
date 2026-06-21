@@ -8,6 +8,8 @@ jobs:
   update_hacs_manifest:
     name: "Prepare release asset"
     runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
     steps:
       - name: "Check out repository"
         uses: "actions/checkout@v3"
