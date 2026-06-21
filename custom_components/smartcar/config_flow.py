@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 import voluptuous as vol
+from yarl import URL
 
 from . import populate_entry_data, vehicle_vins_in_use
 from .auth_impl import ClientCredentialsAuthImpl
@@ -44,8 +45,12 @@ from .webhooks import webhook_url_from_id
 _LOGGER = logging.getLogger(__name__)
 
 CONF_USE_WEBHOOKS = "use_webhooks"
+CONF_APPLICATION_ID = "application_id"
 
 GENERAL_CONFIGURATION_SCHEMA = {
+    vol.Required(CONF_APPLICATION_ID): TextSelector(
+        config=TextSelectorConfig(type=TextSelectorType.TEXT)
+    ),
     vol.Required(CONF_USE_WEBHOOKS, default=True): bool,
     vol.Optional(CONF_APPLICATION_MANAGEMENT_TOKEN): TextSelector(
         config=TextSelectorConfig(type=TextSelectorType.TEXT)
@@ -121,6 +126,40 @@ class SmartcarOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):  # ty
             "mode": SMARTCAR_MODE,
             "scope": " ".join(self.requested_scopes),
         }
+
+    async def async_generate_authorize_url(self) -> str:
+        """Generate the Smartcar Connect authorize URL.
+
+        Smartcar's M2M apps start Connect with the ``application_id`` (a UUID)
+        rather than the M2M ``client_id``, so swap that query parameter.
+
+        Returns:
+            The authorize URL.
+        """
+        url = await super().async_generate_authorize_url()
+        application_id = (self.entry_data or {}).get(CONF_APPLICATION_ID)
+        if not application_id:
+            return url
+        query = dict(URL(url).query)
+        query.pop("client_id", None)
+        query[CONF_APPLICATION_ID] = application_id
+        return str(URL(url).with_query(query))
+
+    async def async_step_creation(
+        self,
+        user_input: dict[str, Any] | None = None,  # noqa: ARG002
+    ) -> ConfigFlowResult:
+        """Finish setup without exchanging the Connect authorization code.
+
+        Vehicles are read with the M2M application token (client credentials),
+        so the Connect ``code`` is not exchanged for a token here.
+
+        Returns:
+            The config flow result.
+        """
+        return await self.async_oauth_create_entry(
+            {"auth_implementation": self.flow_impl.domain, "token": {}}
+        )
 
     def _initial_data(self) -> dict[str, Any]:
         return self._get_reauth_entry().data if self.source == SOURCE_REAUTH else {}
