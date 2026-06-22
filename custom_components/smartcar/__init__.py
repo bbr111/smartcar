@@ -348,6 +348,32 @@ def _find_vin(obj: Any) -> str | None:
     return None
 
 
+def _extract_vehicle_ids(payload: Any) -> list[str]:
+    """Extract vehicle ids from a Smartcar vehicles-list response.
+
+    Handles both the legacy ``{"vehicles": ["id", ...]}`` shape and a v3
+    ``{"data": [{"id": "..."}]}`` shape.
+
+    Returns:
+        The list of vehicle ids found.
+    """
+    ids: list[str] = []
+    if not isinstance(payload, dict):
+        return ids
+
+    for item in payload.get("vehicles") or []:
+        if isinstance(item, str):
+            ids.append(item)
+        elif isinstance(item, dict) and item.get("id"):
+            ids.append(item["id"])
+
+    for item in payload.get("data") or []:
+        if isinstance(item, dict) and item.get("id"):
+            ids.append(item["id"])
+
+    return ids
+
+
 async def _store_vehicle_details(
     data: dict,
     auth: AbstractAuth,
@@ -384,23 +410,51 @@ async def _store_vehicle_details(
         # v3 embeds make/model/year in the connection's vehicle attributes.
         vehicle_attrs = attributes.get("vehicle", {})
 
-        _LOGGER.debug("Fetching vehicle resource for vehicle ID: %s", vehicle_id)
+        # The connection's vehicle id is a management-plane id that the vehicle
+        # data API rejects with VEHICLE_NOT_FOUND. Resolve the data-plane
+        # vehicle id(s) for this user via the vehicles list endpoint.
+        _LOGGER.debug("Listing vehicles for user ID: %s", user_id)
+        list_resp = await auth.request("get", "vehicles", user_id=user_id)
+        if list_resp.status >= HTTPStatus.BAD_REQUEST:
+            error_body = await list_resp.text()
+            _LOGGER.error(
+                "Smartcar vehicles list for user %s returned %s: %s",
+                user_id,
+                list_resp.status,
+                error_body,
+            )
+        list_resp.raise_for_status()
+        vehicles_list = await list_resp.json()
+        _LOGGER.debug("Smartcar vehicles list for user %s: %s", user_id, vehicles_list)
+
+        data_vehicle_ids = _extract_vehicle_ids(vehicles_list)
+        data_vehicle_id = (
+            vehicle_id
+            if vehicle_id in data_vehicle_ids
+            else data_vehicle_ids[0]
+            if data_vehicle_ids
+            else vehicle_id
+        )
+
+        _LOGGER.debug("Fetching vehicle resource for vehicle ID: %s", data_vehicle_id)
         attr_resp = await auth.request(
             "get",
-            f"vehicles/{vehicle_id}",
+            f"vehicles/{data_vehicle_id}",
             user_id=user_id,
         )
         if attr_resp.status >= HTTPStatus.BAD_REQUEST:
             error_body = await attr_resp.text()
             _LOGGER.error(
                 "Smartcar vehicle request for %s returned %s: %s",
-                vehicle_id,
+                data_vehicle_id,
                 attr_resp.status,
                 error_body,
             )
         attr_resp.raise_for_status()
         vehicle_info = await attr_resp.json()
-        _LOGGER.debug("Smartcar vehicle response for %s: %s", vehicle_id, vehicle_info)
+        _LOGGER.debug(
+            "Smartcar vehicle response for %s: %s", data_vehicle_id, vehicle_info
+        )
 
         resource = vehicle_info.get("data", vehicle_info)
         if isinstance(resource, list):
@@ -416,10 +470,10 @@ async def _store_vehicle_details(
         vin = _find_vin(vehicle_info)
 
         if not vin:
-            msg = f"No VIN for vehicle {vehicle_id}"
+            msg = f"No VIN for vehicle {data_vehicle_id}"
             raise MissingVINError(msg)
 
-        data["vehicles"][vehicle_id] = {
+        data["vehicles"][data_vehicle_id] = {
             "vin": vin,
             "user_id": user_id,
             "make": make,
