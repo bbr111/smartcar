@@ -390,12 +390,10 @@ async def _store_vehicle_details(
         vin_resp.raise_for_status()
         vin_data = await vin_resp.json()
         _LOGGER.debug("Smartcar VIN response for %s: %s", vehicle_id, vin_data)
-        vin = (
-            vin_data.get("value")
-            or vin_data.get("body", {}).get("value")
-            or vin_data.get("data", {}).get("attributes", {}).get("value")
-            or vin_data.get("data", {}).get("attributes", {}).get("vin")
+        vin_body = (
+            util.signal_body_from_response(vin_data, "vehicleidentification-vin") or {}
         )
+        vin = vin_body.get("value") or vin_body.get("vin")
 
         if not vin:
             msg = f"No VIN for vehicle {vehicle_id}"
