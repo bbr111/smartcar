@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -650,19 +649,15 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
         )
 
         try:
-            responses = await asyncio.gather(
-                *(
-                    async_request_with_retry(
-                        lambda code=code: self.auth.request(
-                            "get",
-                            f"vehicles/{self.vehicle_id}/signals/{code}",
-                            user_id=self.user_id,
-                        ),
-                        logger=_LOGGER,
-                        context=f"Coordinator {self.name} signal {code}",
-                    )
-                    for code in request_codes
-                )
+            response = await async_request_with_retry(
+                lambda: self.auth.request(
+                    "get",
+                    f"vehicles/{self.vehicle_id}/signals",
+                    user_id=self.user_id,
+                    params={"page[size]": 200},
+                ),
+                logger=_LOGGER,
+                context=f"Coordinator {self.name} signals",
             )
 
         # response errors here for responses that have actually completed, i.e.
@@ -677,21 +672,20 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed from exception
             raise
 
-        for response in responses:
-            if response.status in {
-                HTTPStatus.TOO_MANY_REQUESTS,
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            }:
-                msg = f"API returned {response.status} after retries"
-                raise UpdateFailed(msg)
-            response.raise_for_status()
+        if response.status in {
+            HTTPStatus.TOO_MANY_REQUESTS,
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        }:
+            msg = f"API returned {response.status} after retries"
+            raise UpdateFailed(msg)
+        response.raise_for_status()
 
-        response_data = [await response.json() for response in responses]
+        signals_response = await response.json()
 
         return self._merge_signal_data(
             {
-                code: signal_body_from_response(response, code)
-                for code, response in zip(request_codes, response_data, strict=True)
+                code: signal_body_from_response(signals_response, code)
+                for code in request_codes
             }
         )
 
