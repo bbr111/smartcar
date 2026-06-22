@@ -1,6 +1,7 @@
 import asyncio
 from functools import partial
 from http import HTTPStatus
+import json
 import logging
 from typing import Any
 
@@ -406,82 +407,98 @@ async def _store_vehicle_details(
         msg = f"Incomplete Smartcar connection: {connection}"
         raise MissingVINError(msg)
 
-    try:
-        # v3 embeds make/model/year in the connection's vehicle attributes.
-        vehicle_attrs = attributes.get("vehicle", {})
+    # v3 embeds make/model/year in the connection's vehicle attributes.
+    vehicle_attrs = attributes.get("vehicle", {})
+    connection_id = connection.get("id")
 
-        # The connection's vehicle id is a management-plane id that the vehicle
-        # data API rejects with VEHICLE_NOT_FOUND. Resolve the data-plane
-        # vehicle id(s) for this user via the vehicles list endpoint.
-        _LOGGER.debug("Listing vehicles for user ID: %s", user_id)
-        list_resp = await auth.request("get", "vehicles", user_id=user_id)
-        if list_resp.status >= HTTPStatus.BAD_REQUEST:
-            error_body = await list_resp.text()
-            _LOGGER.error(
-                "Smartcar vehicles list for user %s returned %s: %s",
-                user_id,
-                list_resp.status,
-                error_body,
-            )
-        list_resp.raise_for_status()
-        vehicles_list = await list_resp.json()
-        _LOGGER.debug("Smartcar vehicles list for user %s: %s", user_id, vehicles_list)
+    # DIAGNOSTIC PROBE: the connection's vehicle id is rejected by the data API
+    # (VEHICLE_NOT_FOUND) and /v3/vehicles is INVALID_PATH. Try several
+    # candidate endpoints to discover which one returns the vehicle data, and
+    # use the first that succeeds.
+    # (label, path, params, headers, send_sc_user_id)
+    # The Postman collection calls /vehicles/{id} WITHOUT sc-user-id, but
+    # /vehicles/{id}/signals WITH it.
+    probe_candidates: list[tuple[str, str, dict | None, dict | None, bool]] = [
+        ("vehicle (no sc-user-id)", f"vehicles/{vehicle_id}", None, None, False),
+        ("vehicle (sc-user-id)", f"vehicles/{vehicle_id}", None, None, True),
+        (
+            "vehicle+mode=live (no sc-user-id)",
+            f"vehicles/{vehicle_id}",
+            {"mode": "live"},
+            None,
+            False,
+        ),
+        ("connection-self", f"connections/{connection_id}", None, None, False),
+        (
+            "signals (sc-user-id)",
+            f"vehicles/{vehicle_id}/signals",
+            {"page[size]": 200},
+            None,
+            True,
+        ),
+        (
+            "signals (no sc-user-id)",
+            f"vehicles/{vehicle_id}/signals",
+            {"page[size]": 200},
+            None,
+            False,
+        ),
+    ]
 
-        data_vehicle_ids = _extract_vehicle_ids(vehicles_list)
-        data_vehicle_id = (
-            vehicle_id
-            if vehicle_id in data_vehicle_ids
-            else data_vehicle_ids[0]
-            if data_vehicle_ids
-            else vehicle_id
+    working: tuple[str, dict] | None = None
+    for label, path, params, headers, send_uid in probe_candidates:
+        kwargs: dict[str, Any] = {}
+        if send_uid:
+            kwargs["user_id"] = user_id
+        if params:
+            kwargs["params"] = params
+        if headers:
+            kwargs["headers"] = headers
+        try:
+            resp = await auth.request("get", path, **kwargs)
+            body = await resp.text()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("PROBE [%s] GET /v3/%s raised: %s", label, path, err)
+            continue
+        _LOGGER.warning(
+            "PROBE [%s] GET /v3/%s -> %s: %s", label, path, resp.status, body[:800]
         )
+        if resp.status == HTTPStatus.OK and working is None:
+            try:
+                working = (path, json.loads(body))
+            except ValueError:
+                pass
 
-        _LOGGER.debug("Fetching vehicle resource for vehicle ID: %s", data_vehicle_id)
-        attr_resp = await auth.request(
-            "get",
-            f"vehicles/{data_vehicle_id}",
-            user_id=user_id,
+    if working is None:
+        msg = (
+            f"No working vehicle-data endpoint for connection {connection_id}; "
+            "see PROBE log lines above"
         )
-        if attr_resp.status >= HTTPStatus.BAD_REQUEST:
-            error_body = await attr_resp.text()
-            _LOGGER.error(
-                "Smartcar vehicle request for %s returned %s: %s",
-                data_vehicle_id,
-                attr_resp.status,
-                error_body,
-            )
-        attr_resp.raise_for_status()
-        vehicle_info = await attr_resp.json()
-        _LOGGER.debug(
-            "Smartcar vehicle response for %s: %s", data_vehicle_id, vehicle_info
-        )
+        raise MissingVINError(msg)
 
-        resource = vehicle_info.get("data", vehicle_info)
-        if isinstance(resource, list):
-            resource = resource[0] if resource else {}
-        resource_attrs = (
-            resource.get("attributes", resource) if isinstance(resource, dict) else {}
-        )
+    used_path, vehicle_info = working
+    _LOGGER.warning("Using vehicle-data endpoint /v3/%s", used_path)
 
-        make = vehicle_attrs.get("make") or resource_attrs.get("make")
-        model = vehicle_attrs.get("model") or resource_attrs.get("model")
-        year = vehicle_attrs.get("year") or resource_attrs.get("year")
+    resource = vehicle_info.get("data", vehicle_info)
+    if isinstance(resource, list):
+        resource = resource[0] if resource else {}
+    resource_attrs = (
+        resource.get("attributes", resource) if isinstance(resource, dict) else {}
+    )
 
-        vin = _find_vin(vehicle_info)
+    make = vehicle_attrs.get("make") or resource_attrs.get("make")
+    model = vehicle_attrs.get("model") or resource_attrs.get("model")
+    year = vehicle_attrs.get("year") or resource_attrs.get("year")
 
-        if not vin:
-            msg = f"No VIN for vehicle {data_vehicle_id}"
-            raise MissingVINError(msg)
+    vin = _find_vin(vehicle_info)
+    if not vin:
+        msg = f"No VIN found via /v3/{used_path}; see PROBE log lines above"
+        raise MissingVINError(msg)
 
-        data["vehicles"][data_vehicle_id] = {
-            "vin": vin,
-            "user_id": user_id,
-            "make": make,
-            "model": model,
-            "year": year,
-        }
-    except ClientResponseError as err:
-        if err.status == HTTPStatus.UNAUTHORIZED:
-            msg = f"Auth error [{err.status}] during vehicle setup"
-            raise InvalidAuthError(msg) from err
-        raise
+    data["vehicles"][vehicle_id] = {
+        "vin": vin,
+        "user_id": user_id,
+        "make": make,
+        "model": model,
+        "year": year,
+    }
