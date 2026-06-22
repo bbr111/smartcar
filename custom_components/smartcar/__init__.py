@@ -415,23 +415,41 @@ async def _store_vehicle_details(
     # (VEHICLE_NOT_FOUND) and /v3/vehicles is INVALID_PATH. Try several
     # candidate endpoints to discover which one returns the vehicle data, and
     # use the first that succeeds.
-    probe_candidates: list[tuple[str, str, dict | None, dict | None]] = [
-        ("vehicle", f"vehicles/{vehicle_id}", None, None),
-        ("vehicle+mode=live", f"vehicles/{vehicle_id}", {"mode": "live"}, None),
-        ("vehicle+sc-mode", f"vehicles/{vehicle_id}", None, {"sc-mode": "live"}),
-        ("connection-id-as-vehicle", f"vehicles/{connection_id}", None, None),
-        ("connection-self", f"connections/{connection_id}", None, None),
+    # (label, path, params, headers, send_sc_user_id)
+    # The Postman collection calls /vehicles/{id} WITHOUT sc-user-id, but
+    # /vehicles/{id}/signals WITH it.
+    probe_candidates: list[tuple[str, str, dict | None, dict | None, bool]] = [
+        ("vehicle (no sc-user-id)", f"vehicles/{vehicle_id}", None, None, False),
+        ("vehicle (sc-user-id)", f"vehicles/{vehicle_id}", None, None, True),
         (
-            "signals+mode=live",
-            f"vehicles/{vehicle_id}/signals",
-            {"mode": "live", "page[size]": 200},
+            "vehicle+mode=live (no sc-user-id)",
+            f"vehicles/{vehicle_id}",
+            {"mode": "live"},
             None,
+            False,
+        ),
+        ("connection-self", f"connections/{connection_id}", None, None, False),
+        (
+            "signals (sc-user-id)",
+            f"vehicles/{vehicle_id}/signals",
+            {"page[size]": 200},
+            None,
+            True,
+        ),
+        (
+            "signals (no sc-user-id)",
+            f"vehicles/{vehicle_id}/signals",
+            {"page[size]": 200},
+            None,
+            False,
         ),
     ]
 
     working: tuple[str, dict] | None = None
-    for label, path, params, headers in probe_candidates:
-        kwargs: dict[str, Any] = {"user_id": user_id}
+    for label, path, params, headers, send_uid in probe_candidates:
+        kwargs: dict[str, Any] = {}
+        if send_uid:
+            kwargs["user_id"] = user_id
         if params:
             kwargs["params"] = params
         if headers:
