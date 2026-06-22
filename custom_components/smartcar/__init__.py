@@ -327,6 +327,27 @@ async def _store_all_vehicles(
     )
 
 
+def _find_vin(obj: Any) -> str | None:
+    """Recursively search a decoded JSON structure for a VIN value.
+
+    Returns:
+        The first value of a key named ``vin``, or None.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key.lower() == "vin" and isinstance(value, str) and value:
+                return value
+            found = _find_vin(value)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_vin(item)
+            if found:
+                return found
+    return None
+
+
 async def _store_vehicle_details(
     data: dict,
     auth: AbstractAuth,
@@ -360,42 +381,31 @@ async def _store_vehicle_details(
         raise MissingVINError(msg)
 
     try:
-        # v3 embeds make/model/year in the connection's vehicle attributes;
-        # fall back to the vehicle attributes endpoint if they are missing.
+        # v3 embeds make/model/year in the connection's vehicle attributes.
         vehicle_attrs = attributes.get("vehicle", {})
-        make = vehicle_attrs.get("make")
-        model = vehicle_attrs.get("model")
-        year = vehicle_attrs.get("year")
 
-        if not make:
-            _LOGGER.debug("Fetching attributes for vehicle ID: %s", vehicle_id)
-            attr_resp = await auth.request(
-                "get",
-                f"vehicles/{vehicle_id}",
-                user_id=user_id,
-            )
-            attr_resp.raise_for_status()
-            vehicle_info = await attr_resp.json()
-            attrs = vehicle_info.get("data", {}).get("attributes", vehicle_info)
-            make = attrs.get("make")
-            model = attrs.get("model")
-            year = attrs.get("year")
-
-        _LOGGER.debug("Fetching signals for vehicle ID: %s", vehicle_id)
-        signals_resp = await auth.request(
+        _LOGGER.debug("Fetching vehicle resource for vehicle ID: %s", vehicle_id)
+        attr_resp = await auth.request(
             "get",
-            f"vehicles/{vehicle_id}/signals",
+            f"vehicles/{vehicle_id}",
             user_id=user_id,
-            params={"page[size]": 200},
         )
-        signals_resp.raise_for_status()
-        signals_data = await signals_resp.json()
-        _LOGGER.debug("Smartcar signals response for %s: %s", vehicle_id, signals_data)
-        vin_body = (
-            util.signal_body_from_response(signals_data, "vehicleidentification-vin")
-            or {}
+        attr_resp.raise_for_status()
+        vehicle_info = await attr_resp.json()
+        _LOGGER.debug("Smartcar vehicle response for %s: %s", vehicle_id, vehicle_info)
+
+        resource = vehicle_info.get("data", vehicle_info)
+        if isinstance(resource, list):
+            resource = resource[0] if resource else {}
+        resource_attrs = (
+            resource.get("attributes", resource) if isinstance(resource, dict) else {}
         )
-        vin = vin_body.get("value") or vin_body.get("vin")
+
+        make = vehicle_attrs.get("make") or resource_attrs.get("make")
+        model = vehicle_attrs.get("model") or resource_attrs.get("model")
+        year = vehicle_attrs.get("year") or resource_attrs.get("year")
+
+        vin = _find_vin(vehicle_info)
 
         if not vin:
             msg = f"No VIN for vehicle {vehicle_id}"
