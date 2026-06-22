@@ -42,10 +42,11 @@
             },
             "webhooks": {
                 "data": {
+                    "application_id": "Application ID (UUID) for Smartcar Connect",
                     "use_webhooks": "Use webhooks",
                     "application_management_token": "Token: only provide if using webhooks"
                 },
-                "description": "Provide your _Application Management Token_ from your [Smartcar account]({smartcar_url}) to use webhooks.\n\nSee [the documentation]({docs_url}) for further details.",
+                "description": "Provide the _Application ID_ (a UUID) from your [Smartcar account]({smartcar_url}); it is used to open Smartcar Connect so you can link your vehicle.\n\nProvide your _Application Management Token_ as well only if you want to use webhooks.\n\nSee [the documentation]({docs_url}) for further details.",
                 "title": "Smartcar configuration"
             },
             "scopes": {
@@ -83,6 +84,7 @@
         "step": {
             "webhooks": {
                 "data": {
+                    "application_id": "Application ID (UUID) for Smartcar Connect",
                     "use_webhooks": "Use webhooks",
                     "application_management_token": "Token: only provide if using webhooks"
                 },
