@@ -381,17 +381,19 @@ async def _store_vehicle_details(
             model = attrs.get("model")
             year = attrs.get("year")
 
-        _LOGGER.debug("Fetching VIN for vehicle ID: %s", vehicle_id)
-        vin_resp = await auth.request(
+        _LOGGER.debug("Fetching signals for vehicle ID: %s", vehicle_id)
+        signals_resp = await auth.request(
             "get",
-            f"vehicles/{vehicle_id}/signals/vehicleidentification-vin",
+            f"vehicles/{vehicle_id}/signals",
             user_id=user_id,
+            params={"page[size]": 200},
         )
-        vin_resp.raise_for_status()
-        vin_data = await vin_resp.json()
-        _LOGGER.debug("Smartcar VIN response for %s: %s", vehicle_id, vin_data)
+        signals_resp.raise_for_status()
+        signals_data = await signals_resp.json()
+        _LOGGER.debug("Smartcar signals response for %s: %s", vehicle_id, signals_data)
         vin_body = (
-            util.signal_body_from_response(vin_data, "vehicleidentification-vin") or {}
+            util.signal_body_from_response(signals_data, "vehicleidentification-vin")
+            or {}
         )
         vin = vin_body.get("value") or vin_body.get("vin")
 
