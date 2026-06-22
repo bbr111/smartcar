@@ -300,7 +300,13 @@ async def _store_all_vehicles(
         connections_resp = await auth.request("get", "connections")
         connections_resp.raise_for_status()
         connections_data = await connections_resp.json()
-        connections = connections_data.get("connections", [])
+        _LOGGER.debug("Smartcar /connections response: %s", connections_data)
+        connections = (
+            connections_data.get("connections")
+            or connections_data.get("vehicles")
+            or connections_data.get("data")
+            or []
+        )
     except ClientResponseError as err:
         if err.status == HTTPStatus.UNAUTHORIZED:
             msg = f"Auth error fetching vehicle connections: {err.status}"
@@ -310,6 +316,10 @@ async def _store_all_vehicles(
     _LOGGER.info("Found %s vehicle connections", len(connections))
 
     if not connections:
+        _LOGGER.warning(
+            "Smartcar returned no vehicle connections; raw response: %s",
+            connections_data,
+        )
         raise EmptyVehicleListError
 
     await asyncio.gather(
