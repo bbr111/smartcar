@@ -25,7 +25,12 @@ from homeassistant.util import dt as dt_util
 
 from .auth import AbstractAuth
 from .const import CONF_APPLICATION_MANAGEMENT_TOKEN, DOMAIN, EntityDescriptionKey
-from .util import async_request_with_retry, key_path_get, key_path_update
+from .util import (
+    async_request_with_retry,
+    key_path_get,
+    key_path_update,
+    signal_body_from_response,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -684,10 +689,15 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
         response_data = [await response.json() for response in responses]
 
         return self._merge_signal_data(
-            dict(zip(request_codes, response_data, strict=True))
+            {
+                code: signal_body_from_response(response, code)
+                for code, response in zip(request_codes, response_data, strict=True)
+            }
         )
 
-    def _merge_signal_data(self, signal_data: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    def _merge_signal_data(
+        self, signal_data: dict[str, dict[str, Any] | None]
+    ) -> dict[str, Any]:
         """Merge data from v3 signal responses.
 
         Returns:
@@ -696,6 +706,10 @@ class SmartcarVehicleCoordinator(DataUpdateCoordinator):
 
         with self.create_updated_data() as (add, updated_data):
             for code, body in signal_data.items():
+                if body is None:
+                    add.from_response_body(code, body=None)
+                    continue
+
                 unit = body.pop("unit", None)
                 if unit == "percent":
                     _normalize_percent_signal_body(code, body)

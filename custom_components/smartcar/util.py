@@ -79,6 +79,52 @@ def hmac_sha256_hexdigest(key: str, msg: str) -> str:
     return hmac.new(key.encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
+def signal_body_from_response(
+    response: Any,  # noqa: ANN401
+    code: str | None = None,
+) -> dict[str, Any] | None:
+    """Extract the signal ``body`` from a Smartcar v3 signals response.
+
+    The v3 signals schema wraps each signal as
+    ``{"data": [{"attributes": {"code": ..., "body": {...}}}]}``. Return the
+    matching signal's ``body`` (e.g. ``{"value": ..., "unit": ...}``), falling
+    back to flatter shapes so simpler payloads keep working.
+
+    Returns:
+        The signal body, or None if it cannot be found.
+    """
+    if not isinstance(response, dict):
+        return None
+
+    data = response.get("data")
+    items = (
+        data if isinstance(data, list) else [data] if isinstance(data, dict) else None
+    )
+
+    if items is not None:
+        attributes: Any = None
+        if code is not None:
+            attributes = next(
+                (
+                    item["attributes"]
+                    for item in items
+                    if isinstance(item, dict)
+                    and item.get("attributes", {}).get("code") == code
+                ),
+                None,
+            )
+        if attributes is None and items and isinstance(items[0], dict):
+            attributes = items[0].get("attributes")
+        if not isinstance(attributes, dict):
+            return None
+        body = attributes.get("body")
+        return body if isinstance(body, dict) else None
+
+    if isinstance(response.get("body"), dict):
+        return response["body"]
+    return response
+
+
 def _key_path_traverse[KeyT: str, ValueT](
     dict_obj: dict[KeyT, ValueT],
     key_path: str,
