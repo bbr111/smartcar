@@ -340,26 +340,46 @@ async def _store_vehicle_details(
         ClientResponseError: If there is a request error.
     """
 
-    vehicle_id = connection.get("vehicleId") or connection.get("vehicle_id")
-    user_id = connection.get("userId") or connection.get("user_id")
+    relationships = connection.get("relationships", {})
+    attributes = connection.get("attributes", {})
+
+    vehicle_id = (
+        connection.get("vehicleId")
+        or connection.get("vehicle_id")
+        or relationships.get("vehicle", {}).get("data", {}).get("id")
+    )
+    user_id = (
+        connection.get("userId")
+        or connection.get("user_id")
+        or relationships.get("user", {}).get("data", {}).get("id")
+        or attributes.get("user", {}).get("id")
+    )
 
     if not vehicle_id or not user_id:
         msg = f"Incomplete Smartcar connection: {connection}"
         raise MissingVINError(msg)
 
     try:
-        _LOGGER.debug("Fetching attributes for vehicle ID: %s", vehicle_id)
-        attr_resp = await auth.request(
-            "get",
-            f"vehicles/{vehicle_id}",
-            user_id=user_id,
-        )
-        attr_resp.raise_for_status()
-        vehicle_info = await attr_resp.json()
-        attrs = vehicle_info.get("data", {}).get("attributes", vehicle_info)
-        make = attrs.get("make")
-        model = attrs.get("model")
-        year = attrs.get("year")
+        # v3 embeds make/model/year in the connection's vehicle attributes;
+        # fall back to the vehicle attributes endpoint if they are missing.
+        vehicle_attrs = attributes.get("vehicle", {})
+        make = vehicle_attrs.get("make")
+        model = vehicle_attrs.get("model")
+        year = vehicle_attrs.get("year")
+
+        if not make:
+            _LOGGER.debug("Fetching attributes for vehicle ID: %s", vehicle_id)
+            attr_resp = await auth.request(
+                "get",
+                f"vehicles/{vehicle_id}",
+                user_id=user_id,
+            )
+            attr_resp.raise_for_status()
+            vehicle_info = await attr_resp.json()
+            attrs = vehicle_info.get("data", {}).get("attributes", vehicle_info)
+            make = attrs.get("make")
+            model = attrs.get("model")
+            year = attrs.get("year")
 
         _LOGGER.debug("Fetching VIN for vehicle ID: %s", vehicle_id)
         vin_resp = await auth.request(
@@ -369,7 +389,13 @@ async def _store_vehicle_details(
         )
         vin_resp.raise_for_status()
         vin_data = await vin_resp.json()
-        vin = vin_data.get("value") or vin_data.get("body", {}).get("value")
+        _LOGGER.debug("Smartcar VIN response for %s: %s", vehicle_id, vin_data)
+        vin = (
+            vin_data.get("value")
+            or vin_data.get("body", {}).get("value")
+            or vin_data.get("data", {}).get("attributes", {}).get("value")
+            or vin_data.get("data", {}).get("attributes", {}).get("vin")
+        )
 
         if not vin:
             msg = f"No VIN for vehicle {vehicle_id}"
