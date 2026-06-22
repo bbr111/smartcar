@@ -390,6 +390,14 @@ async def _store_vehicle_details(
             f"vehicles/{vehicle_id}",
             user_id=user_id,
         )
+        if attr_resp.status >= HTTPStatus.BAD_REQUEST:
+            error_body = await attr_resp.text()
+            _LOGGER.error(
+                "Smartcar vehicle request for %s returned %s: %s",
+                vehicle_id,
+                attr_resp.status,
+                error_body,
+            )
         attr_resp.raise_for_status()
         vehicle_info = await attr_resp.json()
         _LOGGER.debug("Smartcar vehicle response for %s: %s", vehicle_id, vehicle_info)
