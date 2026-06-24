@@ -1,7 +1,6 @@
 import asyncio
 from functools import partial
 from http import HTTPStatus
-import json
 import logging
 from typing import Any
 
@@ -349,32 +348,6 @@ def _find_vin(obj: Any) -> str | None:
     return None
 
 
-def _extract_vehicle_ids(payload: Any) -> list[str]:
-    """Extract vehicle ids from a Smartcar vehicles-list response.
-
-    Handles both the legacy ``{"vehicles": ["id", ...]}`` shape and a v3
-    ``{"data": [{"id": "..."}]}`` shape.
-
-    Returns:
-        The list of vehicle ids found.
-    """
-    ids: list[str] = []
-    if not isinstance(payload, dict):
-        return ids
-
-    for item in payload.get("vehicles") or []:
-        if isinstance(item, str):
-            ids.append(item)
-        elif isinstance(item, dict) and item.get("id"):
-            ids.append(item["id"])
-
-    for item in payload.get("data") or []:
-        if isinstance(item, dict) and item.get("id"):
-            ids.append(item["id"])
-
-    return ids
-
-
 async def _store_vehicle_details(
     data: dict,
     auth: AbstractAuth,
@@ -409,96 +382,49 @@ async def _store_vehicle_details(
 
     # v3 embeds make/model/year in the connection's vehicle attributes.
     vehicle_attrs = attributes.get("vehicle", {})
-    connection_id = connection.get("id")
 
-    # DIAGNOSTIC PROBE: the connection's vehicle id is rejected by the data API
-    # (VEHICLE_NOT_FOUND) and /v3/vehicles is INVALID_PATH. Try several
-    # candidate endpoints to discover which one returns the vehicle data, and
-    # use the first that succeeds.
-    # (label, path, params, headers, send_sc_user_id)
-    # The Postman collection calls /vehicles/{id} WITHOUT sc-user-id, but
-    # /vehicles/{id}/signals WITH it.
-    probe_candidates: list[tuple[str, str, dict | None, dict | None, bool]] = [
-        ("vehicle (no sc-user-id)", f"vehicles/{vehicle_id}", None, None, False),
-        ("vehicle (sc-user-id)", f"vehicles/{vehicle_id}", None, None, True),
-        (
-            "vehicle+mode=live (no sc-user-id)",
-            f"vehicles/{vehicle_id}",
-            {"mode": "live"},
-            None,
-            False,
-        ),
-        ("connection-self", f"connections/{connection_id}", None, None, False),
-        (
-            "signals (sc-user-id)",
-            f"vehicles/{vehicle_id}/signals",
-            {"page[size]": 200},
-            None,
-            True,
-        ),
-        (
-            "signals (no sc-user-id)",
-            f"vehicles/{vehicle_id}/signals",
-            {"page[size]": 200},
-            None,
-            False,
-        ),
-    ]
+    try:
+        # Vehicle attributes (make/model/year): /vehicles/{id} is queried
+        # WITHOUT sc-user-id (per the Smartcar API/Postman collection).
+        _LOGGER.debug("Fetching vehicle resource for vehicle ID: %s", vehicle_id)
+        attr_resp = await auth.request("get", f"vehicles/{vehicle_id}")
+        attr_resp.raise_for_status()
+        vehicle_info = await attr_resp.json()
+        _LOGGER.debug("Smartcar vehicle response for %s: %s", vehicle_id, vehicle_info)
 
-    working: tuple[str, dict] | None = None
-    for label, path, params, headers, send_uid in probe_candidates:
-        kwargs: dict[str, Any] = {}
-        if send_uid:
-            kwargs["user_id"] = user_id
-        if params:
-            kwargs["params"] = params
-        if headers:
-            kwargs["headers"] = headers
-        try:
-            resp = await auth.request("get", path, **kwargs)
-            body = await resp.text()
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("PROBE [%s] GET /v3/%s raised: %s", label, path, err)
-            continue
-        _LOGGER.warning(
-            "PROBE [%s] GET /v3/%s -> %s: %s", label, path, resp.status, body[:800]
+        resource_attrs = vehicle_info.get("data", {}).get("attributes", {})
+        make = vehicle_attrs.get("make") or resource_attrs.get("make")
+        model = vehicle_attrs.get("model") or resource_attrs.get("model")
+        year = vehicle_attrs.get("year") or resource_attrs.get("year")
+
+        # VIN comes from the signals endpoint, which DOES require sc-user-id.
+        _LOGGER.debug("Fetching VIN signal for vehicle ID: %s", vehicle_id)
+        vin_resp = await auth.request(
+            "get",
+            f"vehicles/{vehicle_id}/signals/vehicleidentification-vin",
+            user_id=user_id,
         )
-        if resp.status == HTTPStatus.OK and working is None:
-            try:
-                working = (path, json.loads(body))
-            except ValueError:
-                pass
-
-    if working is None:
-        msg = (
-            f"No working vehicle-data endpoint for connection {connection_id}; "
-            "see PROBE log lines above"
+        vin_resp.raise_for_status()
+        vin_data = await vin_resp.json()
+        _LOGGER.debug("Smartcar VIN signal for %s: %s", vehicle_id, vin_data)
+        vin_body = (
+            util.signal_body_from_response(vin_data, "vehicleidentification-vin") or {}
         )
-        raise MissingVINError(msg)
+        vin = vin_body.get("value") or vin_body.get("vin") or _find_vin(vin_data)
 
-    used_path, vehicle_info = working
-    _LOGGER.warning("Using vehicle-data endpoint /v3/%s", used_path)
+        if not vin:
+            msg = f"No VIN for vehicle {vehicle_id}"
+            raise MissingVINError(msg)
 
-    resource = vehicle_info.get("data", vehicle_info)
-    if isinstance(resource, list):
-        resource = resource[0] if resource else {}
-    resource_attrs = (
-        resource.get("attributes", resource) if isinstance(resource, dict) else {}
-    )
-
-    make = vehicle_attrs.get("make") or resource_attrs.get("make")
-    model = vehicle_attrs.get("model") or resource_attrs.get("model")
-    year = vehicle_attrs.get("year") or resource_attrs.get("year")
-
-    vin = _find_vin(vehicle_info)
-    if not vin:
-        msg = f"No VIN found via /v3/{used_path}; see PROBE log lines above"
-        raise MissingVINError(msg)
-
-    data["vehicles"][vehicle_id] = {
-        "vin": vin,
-        "user_id": user_id,
-        "make": make,
-        "model": model,
-        "year": year,
-    }
+        data["vehicles"][vehicle_id] = {
+            "vin": vin,
+            "user_id": user_id,
+            "make": make,
+            "model": model,
+            "year": year,
+        }
+    except ClientResponseError as err:
+        if err.status == HTTPStatus.UNAUTHORIZED:
+            msg = f"Auth error [{err.status}] during vehicle setup"
+            raise InvalidAuthError(msg) from err
+        raise

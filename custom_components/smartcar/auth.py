@@ -39,6 +39,7 @@ class AbstractAuth(ABC):
         access_token = await self.async_get_access_token()
         headers = dict(kwargs.pop("headers", {}))
         headers["authorization"] = f"Bearer {access_token}"
+        headers.setdefault("content-type", "application/json")
         if user_id:
             headers["sc-user-id"] = user_id
 
